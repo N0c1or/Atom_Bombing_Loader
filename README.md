@@ -1,8 +1,8 @@
 # Atom_Bombing_Loader🚀
-"Atom Bombing" + "Early Bird" Bypass EDR
+" Atom Bombing " + " Early Bird " Bypass EDR
 
-📖 **项目**  
-这是一个在 Windows 平台上实现的 shellcode 注入实验项目。`Early Bird` APC 注入技术结合 `Atom Bombing` 技术全局原子表加载shellcode。
+📖 **项目简介**  
+这是一个在 Windows 平台上实现的 shellcode 注入实验项目。结合了`Early Bird` APC 注入技术和 `Atom Bombing` 技术全局原子表加载shellcode。
 
 ---
 
