@@ -10,7 +10,7 @@
 - 🔒 **XOR 加密**: 使用简单 XOR 密钥对shellcode和敏感函数进行加密，以绕过EDR静态检测。  
 - 📋 **全局原子表存储**: 将 shellcode 分块存储到 Windows 全局原子表中,再通过原子表读取进行重组。  
 - 💉 **Early Bird APC 注入**: 通过 APC 队列将代码注入到 `RuntimeBroker.exe` 进程中，将shellcode加载过程混淆到程序初始化的过程中，规避EDR检测。  
-- 🖥️ **Windows API 调用**: 利用底层函数如 `NtWriteVirtualMemory` 和 `NtQueueApcThread`等其他冷门、底层API(尝试过使用Zw系列API，但目前的效果并不好)。
+- 🖥️ **Windows API 调用**: 利用底层函数如 `NtWriteVirtualMemory` 和 `NtQueueApcThread`等其他冷门、底层API(尝试过使用Zw系列API，但效果并不理想，利用链有待研究)。
 
 ---
 
