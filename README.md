@@ -1,4 +1,4 @@
-# Atom_Bombing_Loader🚀
+# Atom_Bombing_Loader🦄
 " Atom Bombing " + " Early Bird " Bypass EDR
 
 📖 **项目简介**  
@@ -9,14 +9,14 @@
 ✨ **技术特性**  
 - 🔒 **XOR 加密**: 使用简单 XOR 密钥对shellcode和敏感函数进行加密，以绕过EDR静态检测。  
 - 📋 **全局原子表存储**: 将 shellcode 分块存储到 Windows 全局原子表中,再通过原子表读取进行重组。  
-- 💉 **Early Bird APC 注入**: 通过 APC 队列将代码注入到 `RuntimeBroker.exe` 进程中，将shellcode加载过程混淆到程序初始化的过程中，规避EDR检测。  
-- 🖥️ **Windows API 调用**: 利用底层函数如 `NtWriteVirtualMemory` 和 `NtQueueApcThread`等其他冷门、底层API(尝试过使用Zw系列API，但效果并不理想，利用链有待研究)。
+- 💉 **Early Bird APC 注入**: 通过 APC 队列将代码注入到 `Dism.exe` 进程中，将shellcode加载过程混淆到程序初始化的过程中，规避EDR检测。  
+- 🖥️ **Windows API 调用**: 利用`syscall`技术和动态加载API来完全绕过用户态HOOK。
 
 ---
 
 💡 **免杀效果**  
 - ✔ **C2框架**: 使用较为冷门的Havoc框架，生成默认的shellcode，并进行简单的xor加密。  
-- ✔ **某60**: 代码执行、添加用户、提升本地用户为管理员组、dump lsass等敏感操作均未告警(核晶模式下未通过，暂无思路，尚待研究)。  
+- ✔ **某60**: 代码执行、添加用户、提升本地用户为管理员组、dump lsass等敏感操作均未告警(核晶模式也已通过)。  
 - ✔ **某绒安全6.0**: 经过简单测试所有行为操作基本都无感。  
 - ✔ **winXows DefXnder**: 暂未测试，待补充。
   
@@ -51,7 +51,7 @@
 - 更好的内存类型管理：从RW写入payload，随后以RX的内存类型执行shellcode，避免RWX类型的内存被EDR严格监控。
 - 完美bypass数字卫士核晶。
 - 合影留念![bypass](https://github.com/user-attachments/assets/eb8f0500-0768-44c4-bcef-032058a5fdd2)
-- ![AV_Scan](https://github.com/user-attachments/assets/d0099812-5561-4419-8e8a-792292ad26af)
+![AV_Scan](https://github.com/user-attachments/assets/d0099812-5561-4419-8e8a-792292ad26af)
 
 
   
