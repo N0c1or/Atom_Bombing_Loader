@@ -38,17 +38,20 @@
 开源(简介版本)
 -**演示视频：** `https://www.bilibili.com/video/BV14tX6YhEeu/`
 
-**2025.3.23**(暂未发布)
+**2025.3.23**(仅测试，未发布)
 - 修改注入目标，避开被重度监控的系统程序。
 - 对加载方式和函数进行了轻微的调整，修复了部分payload无法正常执行的问题。
-- **已成功完美bypass数字卫士核晶**
+- **已失效-已成功完美bypass数字卫士核晶**
 - 使用默认profile的Cobaltstrike生成的无阶shellcode做到数字卫士核晶环境下全部操作无感。
 - **疑问：免杀到底是技术活还是运气活？**
-- **下个目标点**：
-- `1、修改XOR加密为AES加密，再次增加逆向分析难度。`
-- `2、尝试使用OLLVM进行混淆编译，再再次增加逆向分析难度。`
-- `3、思考：如何在注入行为下尝试hookC2的sleep函数并做到更好的sleepmask技术(汇编真学不下去)。`
-- `4、最后的目标(暂时)：打包成框架发布(再也不写GUI了)。`
+
+**2025.3.26**
+- 函数调用通过unhhok/syscall结合绕过EDR钩子。
+- 修改函数为常见函数, 如`QueueuserAPC`等。
+- 完美bypass数字卫士核晶。
+- 合影留念(![https://github.com/N0c1or/Atom_Bombing_Loader/blob/main/img/bypass.jpg])
+  
+
 
 ---
 
