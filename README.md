@@ -49,7 +49,10 @@
 - 函数调用通过unhhok/syscall结合绕过EDR钩子。
 - 修改函数为常见函数, 如`QueueuserAPC`等。
 - 完美bypass数字卫士核晶。
-- 合影留念(![https://github.com/N0c1or/Atom_Bombing_Loader/blob/main/img/bypass.jpg])
+- 合影留念![bypass](https://github.com/user-attachments/assets/eb8f0500-0768-44c4-bcef-032058a5fdd2)
+- ![AV_Scan](https://github.com/user-attachments/assets/d0099812-5561-4419-8e8a-792292ad26af)
+
+
   
 
 
