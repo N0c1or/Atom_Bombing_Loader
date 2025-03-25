@@ -48,6 +48,7 @@
 **2025.3.26**
 - 函数调用通过unhhok/syscall结合绕过EDR钩子。
 - 修改函数为常见函数, 如`QueueuserAPC`等。
+- 更好的内存类型管理：从RW写入payload，随后以RX的内存类型执行shellcode，避免RWX类型的内存被EDR严格监控。
 - 完美bypass数字卫士核晶。
 - 合影留念![bypass](https://github.com/user-attachments/assets/eb8f0500-0768-44c4-bcef-032058a5fdd2)
 - ![AV_Scan](https://github.com/user-attachments/assets/d0099812-5561-4419-8e8a-792292ad26af)
